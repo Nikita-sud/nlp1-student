@@ -14,6 +14,7 @@ import random
 from . import loglin
 from . import smlp
 from . import clslib
+from . import nb
 
 
 
@@ -111,7 +112,7 @@ def cross_validation_split(pairs, k, seed=0):
 
     return cross_validation_sets
 
-def cross_validation_experiment(data_splits, outcome_space, encoder: 'Encoder', model_option:str, save_to="tmp", loglin_args=dict(), smlp_args=dict()):
+def cross_validation_experiment(data_splits, outcome_space, encoder: 'Encoder', model_option:str, save_to="tmp", loglin_args=dict(), smlp_args=dict(), nb_args=dict()):
     """
     Trains and evaluates k models using a k-fold data split for cross validation. 
     This function returns a dictionary with 
@@ -146,11 +147,23 @@ def cross_validation_experiment(data_splits, outcome_space, encoder: 'Encoder', 
             gold_labels_validation = [gold_label for text, gold_label in validation_set]
             accuracies[fold] = accuracy_score(gold_labels_validation, predictions[fold])
         elif model_option == 'mlp':            
-            metrics, best_epoch, predictions[fold] = smlp.train_neural_network_model(
-                training_set, validation_set, len(outcome_space), encoder, save_to=f'{fold_folder}/model', **smlp_args
+            # the best epoch is picked on a dev split cut from the training fold, so the validation fold is only used for scoring
+            num_dev = len(training_set) // 10
+            smlp.train_neural_network_model(
+                training_set[num_dev:], training_set[:num_dev], len(outcome_space), encoder, save_to=f'{fold_folder}/model', **smlp_args
             )
             models[fold] = f'{fold_folder}/model'
-            accuracies[fold] = metrics[best_epoch]['val_metrics']['accuracy']            
+
+            mlpmodel = smlp.load(f'{fold_folder}/model', device=smlp_args.get('device', 'cpu'))
+            probs = smlp.predict_probs([text for text, gold_label in validation_set], mlpmodel, encoder, batch_size=256)
+            predictions[fold] = probs.argmax(axis=1)
+            gold_labels_validation = [gold_label for text, gold_label in validation_set]
+            accuracies[fold] = accuracy_score(gold_labels_validation, predictions[fold])
+        elif model_option == 'naive_bayes':
+            nbmodel = nb.fit(training_set, encoder, **nb_args)
+            predictions[fold] = nb.predict([text for text, gold_label in validation_set], nbmodel, encoder)
+            gold_labels_validation = [gold_label for text, gold_label in validation_set]
+            accuracies[fold] = accuracy_score(gold_labels_validation, predictions[fold])
         else:
             raise ValueError(f"Unkonwn model_option={model_option}")
 
